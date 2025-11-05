@@ -1,0 +1,194 @@
+---
+title: "hwk"
+format: html
+---
+
+Task 1. Filter table
+
+```{r}
+library(data.table)
+library(tidytable)
+library(tidyverse)
+```
+
+```{r}
+us_abbrevs <- c(
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA",
+  "HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
+  "MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC",
+  "SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
+  "DC","PR","GU","VI","AS","MP","UM"
+)
+```
+
+```{r}
+df <- fread("/Users/sunzehui/R/nuforc_sightings.csv")
+df
+formatted_df <- df %>% 
+  mutate(country = toupper(country)) %>%
+  filter(country %like% "^USA") %>%
+  mutate(shape = toupper(shape)) %>%
+  mutate(state = toupper(state)) %>%
+  filter(!(state == "" | state == "CORRIENTES" | state == "-" | state == "0" | shape == "")) %>%
+  mutate(state = 
+           case_match(state, "MONTANA" ~ "MO", "NEW YORK" ~ "NY", "OHIO" ~ "OH", "WEST VIRGINIA" ~ "WV", "WISCONSIN" ~ "WI", .default = state)
+         ) %>%
+  filter(state %in% us_abbrevs) %>%
+  filter(!state %in% c("ENG", "ENGLAND")) %>%
+  filter(!shape %in% c("OTHER", "UNKNOWN")) 
+
+df1 <- formatted_df %>%
+  group_by(state, shape) %>%
+  reframe(n=n()) %>%
+  arrange(desc(n)) %>%
+  spread(shape, n)
+```
+
+
+```{r}
+length(colnames(df1)) - 1
+```
+
+
+```{r}
+df1[, c("state", "CIRCLE")] %>% arrange(desc(CIRCLE))
+```
+
+Task 2.  PCA on the shape table
+
+```{r}
+df1 <- df1 %>% 
+  mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
+```
+
+```{r}
+prepared_df <- df1 %>%
+  rowwise() %>%
+  mutate(row_sum = sum(c_across(where(is.numeric)))) %>%
+  ungroup() %>%
+  mutate(across(where(is.numeric), ~ (.x) / row_sum)) %>%
+  select(-c(row_sum))
+```
+
+
+```{r}
+id_col <- "state"
+X <- select(prepared_df, setdiff(names(prepared_df), id_col))
+
+fit <- prcomp(X, center = FALSE, scale. = FALSE)
+
+var_explained <- fit$sdev^2 / sum(fit$sdev^2)
+var_explained
+plot(var_explained, type = "b", xlab = "PC", ylab = "Variance Explained", main = "Scree")
+```
+
+
+
+
+```{r}
+scores <- as.data.frame(fit$x) 
+rownames(scores) <- prepared_df$state
+
+plot(scores$PC1, scores$PC2, xlab="PC1", ylab="PC2", main="Scores: PC1 vs PC2"); text(scores$PC1, scores$PC2, labels=rownames(scores), pos = 4, cex=0.4)
+```
+
+```{r}
+loading_matrix <- fit$rotation
+loading_matrix[, c(1,2)]
+
+```
+
+Task 3. Clean and tokenize the summaries
+
+```{r}
+clean_text_ascii <- function(s) {
+  if (is.na(s)) return("")
+  s <- tolower(s)
+  s <- str_replace_all(s, "[^\\x00-\\x7F]+", "")
+  s <- str_squish(s)
+  s
+}
+```
+
+
+```{r}
+library(stopwords)
+library(tidytext)
+
+colnames(formatted_df)
+formatted_df$summary_clean <- vapply(formatted_df[["summary"]], clean_text_ascii, character(1))
+# tokens via tidytext
+tokens <- formatted_df %>%
+  select(state, summary_clean) %>%
+  unnest_tokens(token, summary_clean, token="words") %>%
+  filter(token != "")
+
+
+# before stopwords
+top_before <- tokens %>%
+  count(token, sort=TRUE) %>%
+  slice_head(n=30)
+top_before
+write.csv(top_before, file.path(outdir, "top_words_before_stopwords.csv"), row.names=FALSE)
+
+# after stopwords
+sw <- stopwords::stopwords("en")
+top_after <- tokens %>%
+  filter(!(token %in% sw), str_length(token) >= 2, !str_detect(token, "^\\d+$")) %>%
+  count(token, sort=TRUE) %>%
+  slice_head(n=30)
+
+write.csv(top_after, file.path(outdir, "top_words_after_stopwords.csv"), row.names=FALSE)
+```
+
+Task 4
+
+```{r}
+vocab <- tokens %>%
+  filter(!(token %in% sw), str_length(token) >= 3, !str_detect(token, "^\\d+$")) %>%
+  count(token, sort=TRUE) %>%
+  slice_head(n=100) %>% pull(token)
+
+kw_counts <- tokens %>%
+  filter(!(token %in% sw), str_length(token) >= 3, token %in% vocab) %>%
+  count(state, token) %>%
+  tidyr::pivot_wider(names_from = token, values_from = n, values_fill = 0L)
+kw_counts
+
+prepared_kw_counts <- kw_counts %>%
+  rowwise() %>%
+  mutate(row_sum = sum(c_across(where(is.numeric)))) %>%
+  ungroup() %>%
+  mutate(across(where(is.numeric), ~ (.x) / row_sum)) %>%
+  select(-c(row_sum))
+
+
+prepared_kw_counts
+```
+
+```{r}
+id_col <- "state"
+X <- select(prepared_kw_counts, setdiff(names(prepared_kw_counts), id_col))
+
+fit <- prcomp(X, center = FALSE, scale. = FALSE)
+
+var_explained <- fit$sdev^2 / sum(fit$sdev^2)
+var_explained
+plot(var_explained, type = "b", xlab = "PC", ylab = "Variance Explained", main = "Scree")
+```
+
+
+```{r}
+scores <- as.data.frame(fit$x) 
+rownames(scores) <- prepared_df$state
+
+plot(scores$PC1, scores$PC2, xlab="PC1", ylab="PC2", main="Scores: PC1 vs PC2"); text(scores$PC1, scores$PC2, labels=rownames(scores), pos = 4, cex=0.4)
+```
+```{r}
+fit$rotation[,1:2]
+```
+
+
+
+
