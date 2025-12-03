@@ -1,7 +1,7 @@
 library(xgboost)
-library(caret)
 library(tidyverse)
 library(reshape2)
+library(caret)
 
 engineer_features <- function(df) {
   ranks <- df %>%
