@@ -19,7 +19,7 @@ clean:
 	rm -f plot/Figure*
 
 build:
-	docker build . -t poker-project
+	docker build . -t zehui
 
 run:
-	docker run --rm -v $(PWD):/home/rstudio/project -w /home/rstudio/project poker-project make
+	docker run --rm -v $(PWD):/home/rstudio/project -w /home/rstudio/project zehui make
